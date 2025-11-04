@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /*
-  Create test fixture projects under dist/fixtures and run `npm i` in each
-  to generate sizeable node_modules trees for scanning/deletion tests.
+  Create test fixture projects under dist/fixtures and run `pnpm i` in each
+  (fallback to `npm i` if pnpm is unavailable) to generate sizeable node_modules
+  trees for scanning/deletion tests.
 
   Usage:
     node scripts/make-test-fixtures.js            # create defaults and install
@@ -29,6 +30,15 @@ function execCmd(cmd, args, options) {
   }
 }
 
+function hasCmd(cmd) {
+  try {
+    const res = spawnSync(cmd, ['--version'], { stdio: 'ignore' });
+    return res && res.status === 0;
+  } catch (_) {
+    return false;
+  }
+}
+
 function parseArgs(argv) {
   const out = { count: 4, install: true, basePath: path.resolve(__dirname, '..', 'dist', 'fixtures') };
   for (let i = 2; i < argv.length; i++) {
@@ -39,6 +49,9 @@ function parseArgs(argv) {
       out.install = false;
     } else if (a === '--path' || a === '-p') {
       out.basePath = path.resolve(argv[++i]);
+    } else if (a === '--no-text') {
+      // optional: skip creating the special text-app-* project
+      out.noText = true;
     } else {
       console.warn(`Unknown arg: ${a}`);
     }
@@ -128,23 +141,58 @@ function makePackageJSON(name) {
     created.push(dir);
   }
 
+  // Always create a special project whose folder name contains the word "text"
+  // to help manual testing of the TUI search/filter feature.
+  if (!opts.noText) {
+    const rand = Math.random().toString(36).slice(2, 8);
+    const dir = path.join(opts.basePath, `text-app-${rand}`);
+    ensureDir(dir);
+    // Use a stable project name; only the folder has a random suffix
+    const pkg = makePackageJSON('text-app');
+    writeJSON(path.join(dir, 'package.json'), pkg);
+    const srcDir = path.join(dir, 'src');
+    ensureDir(srcDir);
+    fs.writeFileSync(
+      path.join(srcDir, 'index.tsx'),
+      `// Text app fixture for search testing\nconsole.log("text app ${rand}")\n`
+    );
+    created.push(dir);
+    console.log(`Added special search test project: ${path.basename(dir)}`);
+  }
+
   if (!opts.install) {
     console.log('Skipping npm install (--no-install provided).');
     return;
   }
 
+  // Choose package manager (prefer pnpm, fallback to npm)
+  const usePnpm = hasCmd('pnpm');
+  const pm = usePnpm ? 'pnpm' : 'npm';
+  console.log(`\nPackage manager: ${pm}${usePnpm ? '' : ' (pnpm not found, falling back)'}\n`);
+
   // Install sequentially to avoid overwhelming the network/disk
   for (const dir of created) {
     console.log(`\n==> Installing dependencies in ${dir}`);
     try {
-      execCmd('npm', ['install', '--no-audit', '--no-fund', '--progress=false'], {
-        cwd: dir,
-        env: { ...process.env, npm_config_loglevel: 'warn' }
-      });
+      if (usePnpm) {
+        execCmd('pnpm', ['install', '--ignore-scripts', '--reporter=silent'], {
+          cwd: dir,
+          env: { ...process.env }
+        });
+      } else {
+        execCmd('npm', ['install', '--no-audit', '--no-fund', '--progress=false'], {
+          cwd: dir,
+          env: { ...process.env, npm_config_loglevel: 'warn' }
+        });
+      }
     } catch (e) {
-      console.error(`npm install failed in ${dir}:`, e.message);
+      console.error(`${pm} install failed in ${dir}:`, e.message);
       console.error('You can rerun later:');
-      console.error(`  (cd ${dir} && npm i --no-audit --no-fund --progress=false)`);
+      if (usePnpm) {
+        console.error(`  (cd ${dir} && pnpm i --ignore-scripts --reporter=silent)`);
+      } else {
+        console.error(`  (cd ${dir} && npm i --no-audit --no-fund --progress=false)`);
+      }
     }
   }
 
