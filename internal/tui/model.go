@@ -66,11 +66,14 @@ type model struct {
 	scanning   bool
 
 	// terminal size
-	termW int
-	termH int
+    termW int
+    termH int
 
-	// help panel
-	showHelp bool
+    // help panel
+    showHelp bool
+
+    // navigation helpers
+    lastG bool
 }
 
 func newModel(path string, opts scanner.Options, dryRun bool) model {
@@ -138,62 +141,169 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc", "ctrl+c":
-			if m.st == statusConfirm {
-				m.st = statusReady
-				return m, nil
-			}
-			if m.st == statusDeleting && m.delCancel != nil {
-				m.delCancel()
-				// keep waiting for done message
-				return m, m.waitDeleteMsg()
-			}
-			if m.st == statusScanning && m.scanCancel != nil {
-				// Gracefully cancel scanning before quitting
-				m.scanCancel()
-			}
-			return m, tea.Quit
-		case "?":
-			// Toggle help panel
-			m.showHelp = !m.showHelp
-			return m, nil
-		case "enter", "d":
-			if m.st == statusReady {
-				if m.selectedCount() == 0 {
-					return m, nil
-				}
-				m.st = statusConfirm
-				return m, nil
-			}
-		case "y":
-			if m.st == statusConfirm {
-				return m.startDeletion()
-			}
-		case "n":
-			if m.st == statusConfirm {
-				m.st = statusReady
-				return m, nil
-			}
-		case "up", "k":
-			if m.st == statusReady && m.cursor > 0 {
-				m.cursor--
-				m.adjustScroll()
-				return m, nil
-			}
-		case "down", "j":
-			if m.st == statusReady && m.cursor < len(m.items)-1 {
-				m.cursor++
-				m.adjustScroll()
-				return m, nil
-			}
-		case " ":
-			if m.st == statusReady {
-				m.toggleSelected()
-				return m, nil
-			}
+    switch msg := msg.(type) {
+    case tea.KeyMsg:
+        // Reset vim 'gg' latch unless consecutive 'g'
+        if msg.String() != "g" {
+            m.lastG = false
+        }
+        // Filtering text input handling
+        if m.filtering {
+            s := msg.String()
+            switch s {
+            case "enter":
+                m.filtering = false
+                m.adjustCursorAfterFilter()
+                return m, nil
+            case "esc":
+                m.filterText = ""
+                m.filtering = false
+                m.cursor = 0
+                m.scrollOffset = 0
+                return m, nil
+            case "backspace":
+                if len(m.filterText) > 0 {
+                    m.filterText = m.filterText[:len(m.filterText)-1]
+                    // jump to first match on change
+                    m.cursor = 0
+                    m.scrollOffset = 0
+                }
+                return m, nil
+            default:
+                // append printable characters (skip control keys)
+                if len(s) == 1 && s >= " " && s <= "~" { // basic ASCII check
+                    m.filterText += s
+                    m.cursor = 0
+                    m.scrollOffset = 0
+                    return m, nil
+                }
+            }
+        }
+        switch msg.String() {
+        case "q", "esc", "ctrl+c":
+            if m.st == statusConfirm {
+                m.st = statusReady
+                return m, nil
+            }
+            if m.st == statusDeleting && m.delCancel != nil {
+                m.delCancel()
+                // keep waiting for done message
+                return m, m.waitDeleteMsg()
+            }
+            if m.st == statusScanning && m.scanCancel != nil {
+                // Gracefully cancel scanning before quitting
+                m.scanCancel()
+            }
+            return m, tea.Quit
+        case "?":
+            // Toggle help panel
+            m.showHelp = !m.showHelp
+            return m, nil
+        case "/":
+            if m.st == statusReady {
+                m.filtering = true
+                // keep existing filterText (acts like search refine)
+                return m, nil
+            }
+        case "enter", "d":
+            if m.st == statusReady {
+                if m.selectedCount() == 0 {
+                    return m, nil
+                }
+                m.st = statusConfirm
+                return m, nil
+            }
+        case "y":
+            if m.st == statusConfirm {
+                return m.startDeletion()
+            }
+        case "n":
+            if m.st == statusConfirm {
+                m.st = statusReady
+                return m, nil
+            }
+        case "up", "k":
+            if m.st == statusReady {
+                if m.cursor > 0 {
+                    m.cursor--
+                }
+                m.adjustScroll()
+                return m, nil
+            }
+        case "down", "j":
+            if m.st == statusReady {
+                view := m.viewIndexes()
+                if m.cursor < len(view)-1 {
+                    m.cursor++
+                }
+                m.adjustScroll()
+                return m, nil
+            }
+        case "ctrl+f":
+            if m.st == statusReady {
+                step := m.visibleHeight()
+                view := m.viewIndexes()
+                m.cursor += step
+                if m.cursor >= len(view) {
+                    m.cursor = len(view) - 1
+                }
+                if m.cursor < 0 { m.cursor = 0 }
+                m.adjustScroll()
+                return m, nil
+            }
+        case "ctrl+b":
+            if m.st == statusReady {
+                step := m.visibleHeight()
+                m.cursor -= step
+                if m.cursor < 0 { m.cursor = 0 }
+                m.adjustScroll()
+                return m, nil
+            }
+        case "home":
+            if m.st == statusReady {
+                m.cursor = 0
+                m.adjustScroll()
+                return m, nil
+            }
+        case "end":
+            if m.st == statusReady {
+                view := m.viewIndexes()
+                if len(view) > 0 {
+                    m.cursor = len(view) - 1
+                } else {
+                    m.cursor = 0
+                }
+                m.adjustScroll()
+                return m, nil
+            }
+        case "g":
+            if m.st == statusReady {
+                if m.lastG {
+                    // gg -> top
+                    m.cursor = 0
+                    m.adjustScroll()
+                    m.lastG = false
+                    return m, nil
+                }
+                m.lastG = true
+                return m, nil
+            }
+        case "G":
+            if m.st == statusReady {
+                view := m.viewIndexes()
+                if len(view) > 0 {
+                    m.cursor = len(view) - 1
+                } else {
+                    m.cursor = 0
+                }
+                m.adjustScroll()
+                return m, nil
+            }
+        case " ":
+            if m.st == statusReady {
+                m.toggleSelected()
+                return m, nil
+            }
 		case "s":
 			if m.st == statusReady {
 				m.toggleSortField()
@@ -256,19 +366,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	switch m.st {
-	case statusScanning:
-		base := m.headerText() + m.renderList()
-		if m.showHelp {
-			base += "\n" + m.helpText()
-		}
-		return base
-	case statusReady:
-		base := m.headerText() + m.renderList()
-		if m.showHelp {
-			base += "\n" + m.helpText()
-		}
-		return base
+    switch m.st {
+    case statusScanning:
+        base := m.headerText() + m.renderList()
+        if m.showHelp {
+            base += "\n" + m.helpText()
+        }
+        return base
+    case statusReady:
+        base := m.headerText() + m.renderList()
+        if m.showHelp {
+            base += "\n" + m.helpText()
+        }
+        return base
 	case statusConfirm:
 		cnt := m.selectedCount()
 		size := utils.HumanizeBytes(m.selectedSize)
@@ -306,34 +416,29 @@ type item struct {
 
 // Custom list rendering - no bubbles/list component
 func (m *model) renderList() string {
-	if len(m.items) == 0 {
-		return "No node_modules found.\n"
-	}
+    if len(m.items) == 0 {
+        return "No node_modules found.\n"
+    }
 
-	var b strings.Builder
-	headerLines := strings.Count(m.headerText(), "\n") + 1
-	visibleHeight := m.termH - headerLines - 1
-	if visibleHeight < 3 {
-		visibleHeight = 3
-	}
+    var b strings.Builder
+    visibleHeight := m.visibleHeight()
 
-	// Render visible items
-	start := m.scrollOffset
-	end := start + visibleHeight
-	if end > len(m.items) {
-		end = len(m.items)
-	}
+    // Render visible items
+    view := m.viewIndexes()
+    start := m.scrollOffset
+    end := start + visibleHeight
+    if end > len(view) { end = len(view) }
 
-	for i := start; i < end; i++ {
-		it := m.items[i]
+    for i := start; i < end; i++ {
+        it := m.items[view[i]]
 
-		// Build line with styling
-		var prefix string
-		if i == m.cursor {
-			prefix = cursorStyle.Render(">") + " "
-		} else {
-			prefix = "  "
-		}
+        // Build line with styling
+        var prefix string
+        if i == m.cursor {
+            prefix = cursorStyle.Render(">") + " "
+        } else {
+            prefix = "  "
+        }
 
 		var mark string
 		if it.sel {
@@ -361,33 +466,40 @@ func (m *model) renderList() string {
 }
 
 func (m *model) adjustScroll() {
-	headerLines := strings.Count(m.headerText(), "\n") + 1
-	visibleHeight := m.termH - headerLines - 1
-	if visibleHeight < 3 {
-		visibleHeight = 3
-	}
+    visibleHeight := m.visibleHeight()
+    view := m.viewIndexes()
+    if m.cursor >= len(view) {
+        if len(view) > 0 {
+            m.cursor = len(view) - 1
+        } else {
+            m.cursor = 0
+        }
+    }
 
-	// Scroll down if cursor is below visible area
-	if m.cursor >= m.scrollOffset+visibleHeight {
-		m.scrollOffset = m.cursor - visibleHeight + 1
-	}
+    // Scroll down if cursor is below visible area
+    if m.cursor >= m.scrollOffset+visibleHeight {
+        m.scrollOffset = m.cursor - visibleHeight + 1
+    }
 
-	// Scroll up if cursor is above visible area
-	if m.cursor < m.scrollOffset {
-		m.scrollOffset = m.cursor
-	}
+    // Scroll up if cursor is above visible area
+    if m.cursor < m.scrollOffset {
+        m.scrollOffset = m.cursor
+    }
 }
 
 func (m *model) toggleSelected() {
-	if m.cursor < 0 || m.cursor >= len(m.items) {
-		return
-	}
-	m.items[m.cursor].sel = !m.items[m.cursor].sel
-	if m.items[m.cursor].sel {
-		m.selectedSize += m.items[m.cursor].size
-	} else {
-		m.selectedSize -= m.items[m.cursor].size
-	}
+    if m.cursor < 0 || m.cursor >= len(m.items) {
+        return
+    }
+    view := m.viewIndexes()
+    if len(view) == 0 { return }
+    idx := view[m.cursor]
+    m.items[idx].sel = !m.items[idx].sel
+    if m.items[idx].sel {
+        m.selectedSize += m.items[idx].size
+    } else {
+        m.selectedSize -= m.items[idx].size
+    }
 }
 
 func (m *model) toggleSortField() {
@@ -431,10 +543,10 @@ func (m *model) waitScanMsg() tea.Cmd {
 }
 
 func (m *model) appendResult(r scanner.ResultItem) {
-	m.results = append(m.results, r)
-	if r.Err == nil {
-		m.totalSize += r.Size
-	}
+    m.results = append(m.results, r)
+    if r.Err == nil {
+        m.totalSize += r.Size
+    }
 	// Append to items array and sort
 	m.items = append(m.items, item{
 		path: r.Path,
@@ -442,7 +554,7 @@ func (m *model) appendResult(r scanner.ResultItem) {
 		size: r.Size,
 		err:  r.Err,
 	})
-	m.applySort()
+    m.applySort()
 }
 
 func (m *model) displayPath(p string) string {
@@ -454,30 +566,80 @@ func (m *model) displayPath(p string) string {
 }
 
 func (m *model) headerText() string {
-	switch m.st {
-	case statusScanning:
-		elapsed := time.Since(m.startedAt).Round(time.Millisecond)
-		return fmt.Sprintf("Scanning... %s  Found: %d  Total: %s  Elapsed: %s\nPress ? for help\n\n", m.sp.View(), len(m.results), utils.HumanizeBytes(m.totalSize), elapsed)
-	case statusReady:
-		return fmt.Sprintf("Found: %d  Total: %s  Selected: %s  | Keys: ? help, ↑↓ move, space select, s sort, r reverse, / filter, d/enter delete, q quit\n\n",
-			len(m.results), utils.HumanizeBytes(m.totalSize), utils.HumanizeBytes(m.selectedSize))
-	default:
-		return ""
-	}
+    switch m.st {
+    case statusScanning:
+        elapsed := time.Since(m.startedAt).Round(time.Millisecond)
+        return fmt.Sprintf("Scanning... %s  Found: %d  Total: %s  Elapsed: %s\nPress ? for help\n\n", m.sp.View(), len(m.results), utils.HumanizeBytes(m.totalSize), elapsed)
+    case statusReady:
+        filterInfo := ""
+        if m.filtering || m.filterText != "" {
+            view := m.viewIndexes()
+            if m.filtering {
+                filterInfo = fmt.Sprintf(" | Filter: /%s_ (%d)", m.filterText, len(view))
+            } else {
+                filterInfo = fmt.Sprintf(" | Filter: /%s (%d)", m.filterText, len(view))
+            }
+        }
+        return fmt.Sprintf("Found: %d  Total: %s  Selected: %s%s  | Keys: ? help, ↑↓ move, ctrl+f/ctrl+b page, Home End, gg/G, space select, s sort, r reverse, / filter, d/enter delete, q quit\n\n",
+            len(m.results), utils.HumanizeBytes(m.totalSize), utils.HumanizeBytes(m.selectedSize), filterInfo)
+    default:
+        return ""
+    }
 }
 
 func (m *model) helpText() string {
-	// Minimal help panel
-	lines := []string{
-		"Help (press ? to close):",
-		"  ↑/k, ↓/j  Move cursor",
-		"  space     Toggle selection",
-		"  s         Toggle sort field (size/path)",
-		"  r         Reverse sort",
-		"  d/enter   Delete selected",
-		"  q/esc     Quit (cancels delete; cancels scan)",
-	}
-	return lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.NormalBorder()).Render(strings.Join(lines, "\n"))
+    // Minimal help panel
+    lines := []string{
+        "Help (press ? to close):",
+        "  ↑/k, ↓/j  Move cursor",
+        "  ctrl+f / ctrl+b  Page down/up",
+        "  Home/End   Jump to top/bottom",
+        "  gg / G     Jump to top/bottom (vim)",
+        "  space     Toggle selection",
+        "  s         Toggle sort field (size/path)",
+        "  r         Reverse sort",
+        "  /         Filter (type, Enter to confirm, Esc to clear)",
+        "  d/enter   Delete selected",
+        "  q/esc     Quit (cancels delete; cancels scan)",
+    }
+    return lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.NormalBorder()).Render(strings.Join(lines, "\n"))
+}
+
+// viewIndexes returns indexes of items matching filter (or all if no filter).
+func (m *model) viewIndexes() []int {
+    if m.filterText == "" {
+        idx := make([]int, len(m.items))
+        for i := range m.items { idx[i] = i }
+        return idx
+    }
+    q := strings.ToLower(m.filterText)
+    out := make([]int, 0, len(m.items))
+    for i, it := range m.items {
+        if strings.Contains(strings.ToLower(it.disp), q) || strings.Contains(strings.ToLower(it.path), q) {
+            out = append(out, i)
+        }
+    }
+    return out
+}
+
+func (m *model) visibleHeight() int {
+    headerLines := strings.Count(m.headerText(), "\n") + 1
+    h := m.termH - headerLines - 1
+    if h < 3 { h = 3 }
+    return h
+}
+
+func (m *model) adjustCursorAfterFilter() {
+    view := m.viewIndexes()
+    if len(view) == 0 {
+        m.cursor = 0
+        m.scrollOffset = 0
+        return
+    }
+    if m.cursor >= len(view) {
+        m.cursor = 0
+    }
+    m.adjustScroll()
 }
 
 var (
