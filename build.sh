@@ -9,7 +9,8 @@ set -euo pipefail
 
 APP_NAME="node-module-man"
 OUT_DIR="dist"
-LDFLAGS="-s -w"
+VERSION=${VERSION:-dev}
+LDFLAGS="-s -w -X main.version=${VERSION}"
 PKG="./cmd/node-module-man"
 
 mkdir -p "${OUT_DIR}"
@@ -42,4 +43,3 @@ else
 fi
 
 echo "Binaries in ${OUT_DIR}/"
-
