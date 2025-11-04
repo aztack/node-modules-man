@@ -1,0 +1,35 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.fleet/
+.history/
+
+# Go workspaces (keep go.mod and go.sum tracked)
+go.work
+go.work.sum
+
+# Builds / Artifacts
+dist/
+bin/
+build/
+out/
+.cache/
+tmp/
+.tmp/
+
+# Test & coverage outputs
+*.out
+*.coverprofile
+*.cov
+coverage/
+
+# Logs & env
+*.log
+.env
+.env.*
+!.env.example
+
+# Node (if present in test fixtures, keep out of VCS)
+node_modules/
