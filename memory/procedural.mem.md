@@ -22,3 +22,36 @@
 
 **验证**:
 - 运行并观察首行左边距；多次按上下键确认无重复行；调整窗口大小验证列表高度与对齐无异常。
+
+## Windowed List Rendering with Paging (Bubble Tea custom list)
+
+**目标**: 在大量条目时仅渲染可见窗口，支持 PageUp/PageDown、Home/End、gg/G 导航，保持滚动流畅和选择准确。
+
+**前置条件**:
+- 使用自定义列表切片渲染（非 bubbles/list），维护 `items`, `cursor`, `scrollOffset`。
+
+**步骤**:
+1. 计算可见高度：`visibleHeight = termH - headerLines - 1`，最小 3。
+2. 根据过滤结果生成 `viewIndexes()`（索引切片），窗口 `[scrollOffset : scrollOffset+visibleHeight]` 进行渲染。
+3. 光标移动时使用 `adjustScroll()` 保证光标在窗口内；超界时收敛到边界。
+4. 绑定按键：
+   - `pgup/ctrl+b`：`cursor -= visibleHeight`
+   - `pgdown/ctrl+f`：`cursor += visibleHeight`
+   - `home`/`gg`：`cursor = 0`
+   - `end`/`G`：`cursor = len(view)-1`
+5. 选择切换使用 `idx := view[cursor]` 映射到原始 `items`，保持筛选视图与实际数据一致。
+
+**验证**:
+- 大列表滚动无卡顿；分页键工作；过滤后分页与选择仍正确；删除后列表与光标位置合理收敛。
+
+## 夹具生成：包含可搜索标记的项目
+
+**目标**: 通过生成名为 `text-app-<随机>` 的夹具项目，便于在 TUI 中验证搜索/过滤（输入 `text` 应能快速定位）。
+
+**步骤**:
+1. 修改 `scripts/make-test-fixtures.js`，在常规 `react-app-*` 之外额外创建 `text-app-<rand>`。
+2. 在其 `src/index.tsx` 写入注释与日志，方便识别（非必须）。
+3. 安装依赖可选（`--no-install`），删除测试仅需存在目录结构即可。
+
+**验证**:
+- 运行脚本后确认生成的目录名包含 `text`；在 TUI 中输入 `/text` 可筛到该项。

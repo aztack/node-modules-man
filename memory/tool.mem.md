@@ -22,3 +22,22 @@ fmt.Fprint(w, line) // 不要 Fprintln
 **注意事项/限制**:
 - 与 `lipgloss` 混用时，尽量只对“片段”着色，不要整行 Render。
 - 流式更新：避免同帧 InsertItem + SetItems；批量 SetItems 更安全。
+
+## `bubbletea` 键位与自定义列表分页
+
+**功能**: 识别 PageUp/PageDown/Home/End 与 Vim 风格 `gg`/`G`。
+
+**要点**:
+- `tea.KeyMsg.String()` 常见映射：`"pgup"`, `"pgdown"`, `"home"`, `"end"`, `"ctrl+b"`, `"ctrl+f"`, `"g"`, `"G"`。
+- 处理 `gg`：使用布尔 `lastG` 记忆前一个按键是 `g`，连续两次视为跳转顶部。
+- 计算可见高度建议封装 `visibleHeight()`，避免在渲染和滚动中重复计算逻辑。
+
+**示例**:
+```go
+case "pgdown", "ctrl+f":
+    step := m.visibleHeight()
+    m.cursor = min(m.cursor+step, len(view)-1)
+    m.adjustScroll()
+case "g":
+    if m.lastG { m.cursor = 0; m.adjustScroll(); m.lastG = false } else { m.lastG = true }
+```
