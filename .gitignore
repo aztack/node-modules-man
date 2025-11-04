@@ -33,3 +33,5 @@ coverage/
 
 # Node (if present in test fixtures, keep out of VCS)
 node_modules/
+copy-to-my-bin.sh
+node-module-man
