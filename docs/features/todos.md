@@ -2,8 +2,9 @@
 
 - TUI polish
   - [x] Add help panel (`?`) with key bindings.
+  - [x] Add filter/search (press `/`, live filtering, quick jump to matches).
+  - [x] Paginate/virtualize large lists for smooth scrolling (windowed render + ctrl+f/ctrl+b, Home/End, gg/G).
   - [ ] Improve layout and styling using `lipgloss` (headers, colors, spacing).
-  - [x] Paginate/virtualize large lists for smooth scrolling (implemented via windowed render).
 
 - Selection + state
   - Persist last used settings (path, excludes, sort) to a config file.

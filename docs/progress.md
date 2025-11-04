@@ -5,11 +5,14 @@
 - TUI 增强：
   - 增加 `?` 帮助面板，列出常用按键。
   - 在扫描阶段按 `q/esc` 会优雅取消扫描（取消上下文）后退出。
+  - 实现分页/虚拟化窗口渲染，支持 ctrl+f/ctrl+b（分页）、Home/End、gg/G 导航，提升大列表性能与可用性。
 - CLI 增强：
   - 新增 `--yes` 非交互确认开关（删除模式）。
   - 支持从 JSON 读取删除目标：`--delete-json <file>` 或 `--delete-stdin`；
     支持数组字符串或对象（`{"path","size"}`）以及包装 `{"targets": ...}` 形式。
   - `--json` 输出删除汇总（success/failure/freed）以便 CI 消费。
+  - 更新测试夹具脚本：`scripts/make-test-fixtures.js` 额外生成 `text-app-<随机后缀>` 项目，便于检验 TUI 搜索/过滤功能；可用 `--no-text` 跳过。
+  - 夹具安装优先使用 pnpm（`pnpm install --ignore-scripts --reporter=silent`），若不可用则回退到 npm（`npm install --no-audit --no-fund --progress=false`）。
 - 版本与构建：
   - 新增 `--version`，通过 `-ldflags "-X main.version=..."` 注入版本。
   - `build.sh` 增加版本注入（`VERSION` 环境变量），新增 `Makefile` 便于 `build/test/fmt`。
