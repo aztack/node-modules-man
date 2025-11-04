@@ -1,5 +1,19 @@
 # 项目进度记录（node-module-man）
 
+## 2025-11-04
+
+- TUI 增强：
+  - 增加 `?` 帮助面板，列出常用按键。
+  - 在扫描阶段按 `q/esc` 会优雅取消扫描（取消上下文）后退出。
+- CLI 增强：
+  - 新增 `--yes` 非交互确认开关（删除模式）。
+  - 支持从 JSON 读取删除目标：`--delete-json <file>` 或 `--delete-stdin`；
+    支持数组字符串或对象（`{"path","size"}`）以及包装 `{"targets": ...}` 形式。
+  - `--json` 输出删除汇总（success/failure/freed）以便 CI 消费。
+- 版本与构建：
+  - 新增 `--version`，通过 `-ldflags "-X main.version=..."` 注入版本。
+  - `build.sh` 增加版本注入（`VERSION` 环境变量），新增 `Makefile` 便于 `build/test/fmt`。
+
 ## 2025-11-03
 
 - 初始化实现计划：`docs/plan.md`（里程碑、架构、测试与验收标准）。

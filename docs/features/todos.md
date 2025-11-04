@@ -1,9 +1,9 @@
 # TODOs
 
 - TUI polish
-  - Add help panel (`?`) with key bindings.
-  - Improve layout and styling using `lipgloss` (headers, colors, spacing).
-  - Paginate/virtualize large lists for smooth scrolling.
+  - [x] Add help panel (`?`) with key bindings.
+  - [ ] Improve layout and styling using `lipgloss` (headers, colors, spacing).
+  - [x] Paginate/virtualize large lists for smooth scrolling (implemented via windowed render).
 
 - Selection + state
   - Persist last used settings (path, excludes, sort) to a config file.
@@ -23,14 +23,15 @@
   - Detailed error panel for failures with retry option.
 
 - CLI enhancements
-  - `--yes` non-interactive deletion confirmation for CLI mode.
-  - Accept targets from JSON input to batch-delete without TUI.
-  - Output machine-readable summaries for CI scripts.
+  - [x] `--yes` non-interactive deletion confirmation for CLI mode.
+  - [x] Accept targets from JSON input to batch-delete without TUI (`--delete-json` or `--delete-stdin`).
+  - [x] Output machine-readable summaries for CI scripts (`--json`).
 
 - Reliability & safety
-  - Cancel scanning on `q` with graceful cleanup.
-  - Guard against long Windows paths and permission errors; friendly messages.
+  - [x] Cancel scanning on `q` with graceful cleanup (context cancel before quit).
+  - [ ] Guard against long Windows paths and permission errors; friendly messages.
 
 - DX & release
-  - Add `Makefile` and CI workflow for cross-platform builds and checksums.
-  - Add version injection via `-ldflags` and `--version` flag.
+  - [x] Add `Makefile` for common tasks.
+  - [ ] Add CI workflow for cross-platform builds and checksums.
+  - [x] Add version injection via `-ldflags` and `--version` flag.
