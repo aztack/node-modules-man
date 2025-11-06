@@ -1,9 +1,12 @@
 APP=node-module-man
 
-.PHONY: build test fmt fixtures version
+.PHONY: build all test fmt fixtures version
 
 build:
 	./build.sh
+
+all:
+	./build.sh all
 
 test:
 	go test ./...
@@ -17,4 +20,3 @@ fixtures:
 # Usage: make version VERSION=1.2.3
 version:
 	VERSION=$(VERSION) ./build.sh
-

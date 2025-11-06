@@ -20,8 +20,16 @@ Scan and clean `node_modules` across a folder recursively. Comes with a fast sca
 
 - One-off build (current OS/arch):
   - `go build ./cmd/node-module-man`
-- Cross-platform build (macOS arm64+amd64 to `dist/`):
-  - `./build.sh`
+- Make targets:
+  - `make build` → macOS arm64+amd64 into `dist/`
+  - `make all` → Mac/Linux/Windows binaries into `dist/`
+  - `make version VERSION=1.2.3` → same as `make build` but with version injection
+- Cross-platform via script:
+  - macOS (arm64+amd64): `./build.sh`
+  - Common OS targets: `./build.sh all`
+- Release artifacts (archives + checksums):
+  - `VERSION=1.2.3 ./build.sh release`
+  - Produces `dist/node-module-man_${VERSION}_${GOOS}_${ARCH}.*` and `dist/checksums_${VERSION}.txt`.
 - Common tasks via Makefile:
   - `make build` • `make test` • `make fmt` • `make version VERSION=1.2.3`
 
