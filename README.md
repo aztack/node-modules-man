@@ -7,7 +7,7 @@ Scan and clean `node_modules` across a folder recursively. Comes with a fast sca
 ## Features
 
 - Fast, concurrent scan for `node_modules` (depth limiting, excludes, symlink options)
-- TUI: live streaming results, sort, multi-select, confirm + delete, progress view
+- TUI: live streaming results, filter, sort, multi-select, select-all/invert, confirm + delete, progress view
 - CLI: JSON output, non-interactive deletion with `--yes`, batch delete from JSON
 - Dry-run mode for safe validation, graceful cancellation during scanning/deleting
 
@@ -36,8 +36,12 @@ Version injection: binaries can embed a version string via `-ldflags`.
 TUI key bindings (press `?` in the app for help):
 - `↑/k`, `↓/j`: move cursor
 - `space`: toggle selection
+- `A` / `ctrl+a`: select all (filtered view)
+- `R` / `ctrl+r`: reverse selection (filtered view)
 - `s`: toggle sort field (size/path)
 - `r`: reverse sort
+- `/`: filter list (type to refine; Enter to confirm; Esc to clear)
+- Navigation: `gg`/`G` jump to top/bottom; `Home`/`End`; `ctrl+f`/`ctrl+b` page
 - `d` or `enter`: confirm deletion
 - `?`: toggle help
 - `q/esc`: quit; cancels ongoing scan or delete
@@ -136,4 +140,3 @@ Generate test fixtures with a Node script (no network by default):
 ## Acknowledgements
 
 - Built with the Charm stack: Bubble Tea and Lipgloss.
-
