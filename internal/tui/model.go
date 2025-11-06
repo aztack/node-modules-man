@@ -304,6 +304,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 m.toggleSelected()
                 return m, nil
             }
+		case "A", "ctrl+a":
+			if m.st == statusReady {
+				m.selectAllVisible()
+				return m, nil
+			}
+		case "R", "ctrl+r":
+			if m.st == statusReady {
+				m.reverseSelectionVisible()
+				return m, nil
+			}
 		case "s":
 			if m.st == statusReady {
 				m.toggleSortField()
@@ -502,6 +512,31 @@ func (m *model) toggleSelected() {
     }
 }
 
+// selectAllVisible selects all items in the current view (respects filter)
+func (m *model) selectAllVisible() {
+    view := m.viewIndexes()
+    for _, idx := range view {
+        if !m.items[idx].sel {
+            m.items[idx].sel = true
+            m.selectedSize += m.items[idx].size
+        }
+    }
+}
+
+// reverseSelectionVisible toggles selection state for all items in view
+func (m *model) reverseSelectionVisible() {
+    view := m.viewIndexes()
+    for _, idx := range view {
+        if m.items[idx].sel {
+            m.items[idx].sel = false
+            m.selectedSize -= m.items[idx].size
+        } else {
+            m.items[idx].sel = true
+            m.selectedSize += m.items[idx].size
+        }
+    }
+}
+
 func (m *model) toggleSortField() {
 	if m.sortBy == "size" {
 		m.sortBy = "path"
@@ -580,7 +615,7 @@ func (m *model) headerText() string {
                 filterInfo = fmt.Sprintf(" | Filter: /%s (%d)", m.filterText, len(view))
             }
         }
-        return fmt.Sprintf("Found: %d  Total: %s  Selected: %s%s  | Keys: ? help, ↑↓ move, ctrl+f/ctrl+b page, Home End, gg/G, space select, s sort, r reverse, / filter, d/enter delete, q quit\n\n",
+        return fmt.Sprintf("Found: %d  Total: %s  Selected: %s%s  | Keys: ? help, ↑↓ move, ctrl+f/ctrl+b page, Home End, gg/G, space select, A select-all, R invert, s sort, r reverse-sort, / filter, d/enter delete, q quit\n\n",
             len(m.results), utils.HumanizeBytes(m.totalSize), utils.HumanizeBytes(m.selectedSize), filterInfo)
     default:
         return ""
@@ -588,7 +623,7 @@ func (m *model) headerText() string {
 }
 
 func (m *model) helpText() string {
-    // Minimal help panel
+    // Simple help panel with a top separator; avoids side/bottom borders.
     lines := []string{
         "Help (press ? to close):",
         "  ↑/k, ↓/j  Move cursor",
@@ -596,13 +631,25 @@ func (m *model) helpText() string {
         "  Home/End   Jump to top/bottom",
         "  gg / G     Jump to top/bottom (vim)",
         "  space     Toggle selection",
+        "  A / ctrl+a Select all (filtered view)",
+        "  R / ctrl+r Reverse selection (filtered view)",
         "  s         Toggle sort field (size/path)",
         "  r         Reverse sort",
         "  /         Filter (type, Enter to confirm, Esc to clear)",
         "  d/enter   Delete selected",
         "  q/esc     Quit (cancels delete; cancels scan)",
     }
-    return lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.NormalBorder()).Render(strings.Join(lines, "\n"))
+    w := m.termW
+    if w <= 0 {
+        w = 80
+    }
+    if w > 100 {
+        w = 100
+    }
+    sep := strings.Repeat("─", w-2)
+    // a bit of left padding for readability
+    content := " " + sep + "\n" + strings.Join(lines, "\n")
+    return content
 }
 
 // viewIndexes returns indexes of items matching filter (or all if no filter).
