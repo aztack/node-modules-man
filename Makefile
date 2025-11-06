@@ -19,4 +19,4 @@ fixtures:
 
 # Usage: make version VERSION=1.2.3
 version:
-	VERSION=$(VERSION) ./build.sh
+	VERSION=$(VERSION) ./build.sh all

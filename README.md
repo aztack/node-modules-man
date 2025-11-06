@@ -43,16 +43,18 @@ Version injection: binaries can embed a version string via `-ldflags`.
 
 TUI key bindings (press `?` in the app for help):
 - `↑/k`, `↓/j`: move cursor
-- `space`: toggle selection
-- `A` / `ctrl+a`: select all (filtered view)
-- `R` / `ctrl+r`: reverse selection (filtered view)
+- `space`/`x`: toggle delete selection `[x]`
+- `z`: toggle compress selection `[z]`
+- `A` / `X` / `ctrl+a`: mark all `[x]` (filtered view)
+- `Z`: mark all `[z]` (filtered view)
+- `R`: invert marks (z→·, x→·, ·→x)
 - `s`: toggle sort field (size/path)
 - `r`: reverse sort
 - `/`: filter list (type to refine; Enter to confirm; Esc to clear)
 - Navigation: `gg`/`G` jump to top/bottom; `Home`/`End`; `ctrl+f`/`ctrl+b` page
-- `d` or `enter`: confirm deletion
+- `d` or `enter`: perform action — delete if any `[x]`, or compress if any `[z]`
 - `?`: toggle help
-- `q/esc`: quit; cancels ongoing scan or delete
+- `q/esc`: quit; cancels ongoing scan/delete/compress
 
 ## CLI Usage
 
@@ -67,6 +69,9 @@ Key flags:
 - `--exclude, -x`: repeatable glob/pattern to exclude (matches path or basename)
 - `--follow-symlinks, -L`: follow symlinked directories
 - `--dry-run, -d`: simulate deletion (no files removed)
+- `--compress-json`, `--compress-stdin`: compress targets from JSON
+- `--out-dir`: output directory for zip archives (default: alongside source)
+- `--delete-after`: delete originals after compress (default: true)
 - `--version`: print version and exit
 
 ### Delete (non-interactive)
@@ -86,6 +91,43 @@ Accepted JSON formats:
 ```
 ```json
 {"targets": ["/abs/path/one", {"path":"/abs/path/two","size":2048}]}
+```
+
+## Examples
+
+- Scan current path (table output):
+  - `./node-module-man --tui=false -p .`
+
+- Scan as JSON, follow symlinks, exclude examples:
+  - `./node-module-man --tui=false --json -p . -L -x '*/examples/*'`
+
+- Delete from a JSON file (non‑interactive):
+  - `./node-module-man --tui=false --delete-json targets.json --yes`
+
+- Compress from stdin to a custom folder, keep originals:
+  - `cat targets.json | ./node-module-man --tui=false --compress-stdin --out-dir ./archives --delete-after=false --yes`
+
+- Compress from a JSON file (default deletes originals after success):
+  - `./node-module-man --tui=false --compress-json targets.json --yes`
+
+Sample `targets.json` inputs accepted by both delete and compress:
+
+```json
+[
+  "/abs/path/to/project-a/node_modules",
+  {"path": "/abs/path/to/project-b/node_modules", "size": 123456}
+]
+```
+
+or wrapped in an object:
+
+```json
+{
+  "targets": [
+    "/abs/path/to/project-a/node_modules",
+    {"path": "/abs/path/to/project-b/node_modules"}
+  ]
+}
 ```
 
 Deletion summary (when `--json`):
@@ -113,9 +155,14 @@ Deletion summary (when `--json`):
 
 ## Safety Notes
 
-- TUI requires confirmation before delete; press `y` on the confirm screen.
-- CLI delete requires `--yes` to proceed without prompt.
+- TUI requires confirmation before delete/press `y`; compression confirm is shown but delete-after is default.
+- CLI delete/compact requires `--yes` to proceed without prompt.
 - Use `--dry-run` during validation to simulate deletions safely.
+
+Compression specifics:
+- Archives are `.zip` with a top-level `node_modules` folder (extracts cleanly).
+- Symlinks inside `node_modules` are skipped for portability.
+- By default, originals are removed after successful compression; disable with `--delete-after=false`.
 
 ## Development
 
