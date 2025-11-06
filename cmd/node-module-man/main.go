@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"node-module-man/internal/deleter"
+	"node-module-man/internal/compressor"
 	"node-module-man/internal/scanner"
 	ui "node-module-man/internal/tui"
 	"node-module-man/pkg/utils"
@@ -33,6 +34,10 @@ func main() {
 		yesDelete   bool
 		deleteJSON  string
 		deleteStdin bool
+		compressJSON string
+		compressStdin bool
+		outDir      string
+		deleteAfter bool
 		concurrency int
 		maxDepth    int
 		useTUI      bool
@@ -48,6 +53,10 @@ func main() {
 	flag.BoolVar(&yesDelete, "yes", false, "Do not prompt for confirmation in CLI delete mode")
 	flag.StringVar(&deleteJSON, "delete-json", "", "Delete targets from JSON file (array of paths or {path,size} objects)")
 	flag.BoolVar(&deleteStdin, "delete-stdin", false, "Read delete targets JSON from stdin")
+	flag.StringVar(&compressJSON, "compress-json", "", "Compress targets from JSON file (array of paths or {path,size} objects)")
+	flag.BoolVar(&compressStdin, "compress-stdin", false, "Read compress targets JSON from stdin")
+    flag.StringVar(&outDir, "out-dir", "", "Output directory for compressed archives (default: alongside source)")
+    flag.BoolVar(&deleteAfter, "delete-after", true, "Delete original directory after successful compression (default true)")
 	flag.IntVar(&concurrency, "concurrency", runtime.NumCPU(), "Concurrency for size calculations")
 	flag.IntVar(&concurrency, "c", runtime.NumCPU(), "Alias of --concurrency")
 	flag.IntVar(&maxDepth, "max-depth", -1, "Max depth for directory walk (-1 for unlimited)")
@@ -102,6 +111,58 @@ func main() {
 			}
 		} else {
 			fmt.Printf("Deleted: %d  Failed: %d  Freed: %s\n", len(sum.Successes), len(sum.Failures), utils.HumanizeBytes(sum.Freed))
+			if len(sum.Failures) > 0 {
+				fmt.Println("Failures:")
+				for _, f := range sum.Failures {
+					fmt.Printf(" - %s: %v\n", f.Path, f.Err)
+				}
+			}
+		}
+		if len(sum.Failures) > 0 {
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Compression CLI mode via JSON input
+	if compressJSON != "" || compressStdin {
+		if !yesDelete {
+			fmt.Fprintln(os.Stderr, "--yes is required for non-interactive compression. Aborting.")
+			os.Exit(2)
+		}
+		var r io.Reader
+		if compressStdin {
+			r = os.Stdin
+		} else {
+			f, err := os.Open(compressJSON)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to open compress-json file: %v\n", err)
+				os.Exit(2)
+			}
+			defer f.Close()
+			r = f
+		}
+		dt, err := readDeleteTargets(r)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid compress targets JSON: %v\n", err)
+			os.Exit(2)
+		}
+		// Map to compressor targets
+		cts := make([]compressor.Target, 0, len(dt))
+		for _, t := range dt {
+			cts = append(cts, compressor.Target{Path: t.Path, Size: t.Size})
+		}
+		ctx := context.Background()
+		sum := compressor.CompressTargets(ctx, cts, compressor.Options{OutDir: outDir, Concurrency: concurrency, DeleteAfter: deleteAfter}, nil)
+		if jsonOut {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(sum); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to write json: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Printf("Compressed: %d  Failed: %d  Written: %s\n", len(sum.Successes), len(sum.Failures), utils.HumanizeBytes(sum.Written))
 			if len(sum.Failures) > 0 {
 				fmt.Println("Failures:")
 				for _, f := range sum.Failures {

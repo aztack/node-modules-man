@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"node-module-man/internal/compressor"
 	"node-module-man/internal/deleter"
 	"node-module-man/internal/scanner"
 	"node-module-man/pkg/utils"
@@ -25,6 +26,9 @@ const (
 	statusConfirm
 	statusDeleting
 	statusDone
+	statusZipConfirm
+	statusZipping
+	statusZipDone
 )
 
 type model struct {
@@ -45,6 +49,7 @@ type model struct {
 	sortBy       string // "size" or "path"
 	sortReverse  bool
 	selectedSize int64
+	zipSelectedSize int64
 	filterText   string
 	filtering    bool
 
@@ -59,6 +64,17 @@ type model struct {
 	// deletion control
 	delCancel func()
 	dryRun    bool
+
+	// compression state
+	zipCh        chan tea.Msg
+	zipTotal     int
+	zipCompleted int
+	zipLastPath  string
+	zipLastDest  string
+	zipWritten   int64
+    zipFailures  []compressor.Failure
+    zipCancel    func()
+    zipDeleteAfter bool
 
 	// scanning stream
 	scanCh     chan tea.Msg
@@ -79,18 +95,19 @@ type model struct {
 func newModel(path string, opts scanner.Options, dryRun bool) model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	m := model{
-		path:        path,
-		opts:        opts,
-		sp:          sp,
-		startedAt:   time.Now(),
-		st:          statusScanning,
-		dryRun:      dryRun,
-		items:       []item{},
-		cursor:      0,
-		sortBy:      "size",
-		sortReverse: true,
-	}
+    m := model{
+        path:        path,
+        opts:        opts,
+        sp:          sp,
+        startedAt:   time.Now(),
+        st:          statusScanning,
+        dryRun:      dryRun,
+        items:       []item{},
+        cursor:      0,
+        sortBy:      "size",
+        sortReverse: true,
+        zipDeleteAfter: true,
+    }
 	// start streaming scan
 	ch := make(chan tea.Msg)
 	m.scanCh = ch
@@ -180,8 +197,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
             }
         }
         switch msg.String() {
-        case "q", "esc", "ctrl+c":
+        case "q", "esc", "ctrl+c", "ctrl+d":
             if m.st == statusConfirm {
+                m.st = statusReady
+                return m, nil
+            }
+            if m.st == statusZipConfirm {
                 m.st = statusReady
                 return m, nil
             }
@@ -189,6 +210,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 m.delCancel()
                 // keep waiting for done message
                 return m, m.waitDeleteMsg()
+            }
+            if m.st == statusZipping && m.zipCancel != nil {
+                m.zipCancel()
+                return m, m.waitZipMsg()
             }
             if m.st == statusScanning && m.scanCancel != nil {
                 // Gracefully cancel scanning before quitting
@@ -207,18 +232,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
             }
         case "enter", "d":
             if m.st == statusReady {
-                if m.selectedCount() == 0 {
+                if m.selectedCount() > 0 {
+                    m.st = statusConfirm
                     return m, nil
                 }
-                m.st = statusConfirm
+                if m.selectedZipCount() > 0 {
+                    m.st = statusZipConfirm
+                    return m, nil
+                }
                 return m, nil
             }
         case "y":
             if m.st == statusConfirm {
                 return m.startDeletion()
             }
+            if m.st == statusZipConfirm {
+                return m.startCompression()
+            }
         case "n":
             if m.st == statusConfirm {
+                m.st = statusReady
+                return m, nil
+            }
+            if m.st == statusZipConfirm {
                 m.st = statusReady
                 return m, nil
             }
@@ -304,6 +340,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 m.toggleSelected()
                 return m, nil
             }
+        case "x":
+            if m.st == statusReady {
+                m.toggleSelected()
+                return m, nil
+            }
+        case "z":
+            if m.st == statusReady {
+                m.toggleCompressSelected()
+                return m, nil
+            }
 		case "A", "ctrl+a":
 			if m.st == statusReady {
 				m.selectAllVisible()
@@ -326,7 +372,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.applySort()
 				return m, nil
 			}
-		}
+		case "Z":
+			if m.st == statusReady {
+				m.selectAllZipVisible()
+				return m, nil
+			}
+		case "X":
+			if m.st == statusReady {
+				m.selectAllVisible()
+				return m, nil
+			}
+        }
 	case tea.WindowSizeMsg:
 		m.termW, m.termH = msg.Width, msg.Height
 		return m, nil
@@ -341,16 +397,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.st == statusDeleting {
 			return m, tea.Batch(cmd, m.waitDeleteMsg())
 		}
+		if m.st == statusZipping {
+			return m, tea.Batch(cmd, m.waitZipMsg())
+		}
 		return m, cmd
 	case scanItemMsg:
 		m.appendResult(msg.item)
 		return m, m.waitScanMsg()
-	case scanCompleteMsg:
+case scanCompleteMsg:
 		m.err = msg.err
 		m.scanning = false
 		m.st = statusReady
 		return m, nil
-	case delProgressMsg:
+case delProgressMsg:
 		m.delCompleted = msg.completed
 		m.delLastPath = msg.path
 		if msg.err == nil {
@@ -358,21 +417,54 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.waitDeleteMsg()
 	case delDoneMsg:
-		m.delFailures = msg.summary.Failures
-		m.delFreed = msg.summary.Freed
-		// remove successes from list and results
-		succ := msg.summary.Successes
-		m.removeDeleted(succ)
-		m.selectedSize = 0
-		m.totalSize -= m.delFreed
-		m.st = statusDone
-		return m, nil
+			m.delFailures = msg.summary.Failures
+			m.delFreed = msg.summary.Freed
+			// remove successes from list and results
+			succ := msg.summary.Successes
+			m.removeDeleted(succ)
+			m.selectedSize = 0
+			m.totalSize -= m.delFreed
+			m.st = statusDone
+			return m, nil
+	case zipProgressMsg:
+			m.zipCompleted = msg.completed
+			m.zipLastPath = msg.path
+			m.zipLastDest = msg.dest
+			if msg.err == nil {
+				m.zipWritten = msg.written
+			}
+			return m, m.waitZipMsg()
+    case zipDoneMsg:
+            m.zipFailures = msg.summary.Failures
+            m.zipWritten = msg.summary.Written
+            // If we deleted sources after compress, remove them from list and adjust totals
+            if m.zipDeleteAfter {
+                // build targets from successes to reuse removeDeleted
+                succ := make([]deleter.Target, 0, len(msg.summary.Successes))
+                freed := int64(0)
+                // quick lookup set
+                rm := make(map[string]struct{}, len(msg.summary.Successes))
+                for _, s := range msg.summary.Successes { rm[s.Path] = struct{}{} }
+                for _, it := range m.items { if _, ok := rm[it.path]; ok { freed += it.size } }
+                for _, s := range msg.summary.Successes { succ = append(succ, deleter.Target{Path: s.Path}) }
+                m.removeDeleted(succ)
+                m.totalSize -= freed
+            } else {
+                // Clear zip selections on success (but keep items)
+                for i := range m.items { m.items[i].selZip = false }
+            }
+            m.zipSelectedSize = 0
+            m.st = statusZipDone
+            return m, nil
 	}
-	if m.st == statusDeleting {
-		// keep spinner ticking and keep waiting for delete messages
-		return m, m.waitDeleteMsg()
-	}
-	return m, nil
+        if m.st == statusDeleting {
+            // keep spinner ticking and keep waiting for delete messages
+            return m, m.waitDeleteMsg()
+        }
+        if m.st == statusZipping {
+            return m, m.waitZipMsg()
+        }
+        return m, nil
 }
 
 func (m model) View() string {
@@ -393,12 +485,18 @@ func (m model) View() string {
 		cnt := m.selectedCount()
 		size := utils.HumanizeBytes(m.selectedSize)
 		return fmt.Sprintf("Confirm delete %d node_modules, freeing ~%s? (y/N)\nPress y to confirm, n/esc to cancel.\n", cnt, size)
-	case statusDeleting:
-		mode := ""
-		if m.dryRun {
-			mode = " [dry-run]"
-		}
-		return fmt.Sprintf("Deleting%s... %s\nProgress: %d/%d\nLast: %s\nPress q to cancel.\n", mode, m.sp.View(), m.delCompleted, m.delTotal, m.delLastPath)
+    case statusZipConfirm:
+        cnt := m.selectedZipCount()
+        size := utils.HumanizeBytes(m.zipSelectedSize)
+        return fmt.Sprintf("Confirm compress %d node_modules to zip (~%s)? (y/N)\nOriginals will be deleted after successful compression (default).\nPress y to confirm, n/esc to cancel.\n", cnt, size)
+    case statusDeleting:
+        mode := ""
+        if m.dryRun {
+            mode = " [dry-run]"
+        }
+        return fmt.Sprintf("Deleting%s... %s\nProgress: %d/%d\nLast: %s\nPress q/ctrl+c/ctrl+d to cancel.\n", mode, m.sp.View(), m.delCompleted, m.delTotal, m.delLastPath)
+    case statusZipping:
+        return fmt.Sprintf("Compressing... %s\nProgress: %d/%d\nLast: %s\nDest: %s\nWritten: %s\nPress q/ctrl+c/ctrl+d to cancel.\n", m.sp.View(), m.zipCompleted, m.zipTotal, m.zipLastPath, m.zipLastDest, utils.HumanizeBytes(m.zipWritten))
 	case statusDone:
 		mode := ""
 		if m.dryRun {
@@ -410,6 +508,13 @@ func (m model) View() string {
 		}
 		s += "Press q to quit or any key to return.\n"
 		return s
+	case statusZipDone:
+		s := fmt.Sprintf("Compress complete. Written %s. Failures: %d\n", utils.HumanizeBytes(m.zipWritten), len(m.zipFailures))
+		for _, f := range m.zipFailures {
+			s += fmt.Sprintf(" - %s: %v\n", f.Path, f.Err)
+		}
+		s += "Press q to quit or any key to return.\n"
+		return s
 	default:
 		return ""
 	}
@@ -417,11 +522,12 @@ func (m model) View() string {
 
 // list helpers
 type item struct {
-	path string
-	disp string
-	size int64
-	err  error
-	sel  bool
+    path string
+    disp string
+    size int64
+    err  error
+    sel  bool
+    selZip bool
 }
 
 // Custom list rendering - no bubbles/list component
@@ -453,6 +559,8 @@ func (m *model) renderList() string {
 		var mark string
 		if it.sel {
 			mark = markSelectedStyle.Render("[x]")
+		} else if it.selZip {
+			mark = markZipStyle.Render("[z]")
 		} else {
 			mark = markStyle.Render("[ ]")
 		}
@@ -462,6 +570,8 @@ func (m *model) renderList() string {
 		var pathStr string
 		if it.sel {
 			pathStr = pathStyleSelected.Render(it.disp)
+		} else if it.selZip {
+			pathStr = pathStyleZip.Render(it.disp)
 		} else {
 			pathStr = it.disp
 		}
@@ -504,11 +614,49 @@ func (m *model) toggleSelected() {
     view := m.viewIndexes()
     if len(view) == 0 { return }
     idx := view[m.cursor]
+    if m.items[idx].selZip {
+        m.items[idx].selZip = false
+        m.zipSelectedSize -= m.items[idx].size
+    }
     m.items[idx].sel = !m.items[idx].sel
     if m.items[idx].sel {
         m.selectedSize += m.items[idx].size
     } else {
         m.selectedSize -= m.items[idx].size
+    }
+}
+
+// toggleCompressSelected toggles [z] selection state
+func (m *model) toggleCompressSelected() {
+    if m.cursor < 0 || m.cursor >= len(m.items) { return }
+    view := m.viewIndexes()
+    if len(view) == 0 { return }
+    idx := view[m.cursor]
+    if m.items[idx].sel {
+        m.items[idx].sel = false
+        m.selectedSize -= m.items[idx].size
+    }
+    m.items[idx].selZip = !m.items[idx].selZip
+    if m.items[idx].selZip {
+        m.zipSelectedSize += m.items[idx].size
+    } else {
+        m.zipSelectedSize -= m.items[idx].size
+    }
+}
+
+// selectAllZipVisible marks all visible items for compression [z].
+// It also clears delete selections on those items to maintain exclusivity.
+func (m *model) selectAllZipVisible() {
+    view := m.viewIndexes()
+    for _, idx := range view {
+        if m.items[idx].sel {
+            m.items[idx].sel = false
+            m.selectedSize -= m.items[idx].size
+        }
+        if !m.items[idx].selZip {
+            m.items[idx].selZip = true
+            m.zipSelectedSize += m.items[idx].size
+        }
     }
 }
 
@@ -523,14 +671,25 @@ func (m *model) selectAllVisible() {
     }
 }
 
-// reverseSelectionVisible toggles selection state for all items in view
+// reverseSelectionVisible applies tri-state invert over visible items:
+// z -> [ ] , x -> [ ] , [ ] -> x
 func (m *model) reverseSelectionVisible() {
     view := m.viewIndexes()
     for _, idx := range view {
+        // z -> [ ]
+        if m.items[idx].selZip {
+            m.items[idx].selZip = false
+            m.zipSelectedSize -= m.items[idx].size
+            continue
+        }
+        // x -> [ ]
         if m.items[idx].sel {
             m.items[idx].sel = false
             m.selectedSize -= m.items[idx].size
-        } else {
+            continue
+        }
+        // [ ] -> x
+        if !m.items[idx].sel && !m.items[idx].selZip {
             m.items[idx].sel = true
             m.selectedSize += m.items[idx].size
         }
@@ -615,8 +774,8 @@ func (m *model) headerText() string {
                 filterInfo = fmt.Sprintf(" | Filter: /%s (%d)", m.filterText, len(view))
             }
         }
-        return fmt.Sprintf("Found: %d  Total: %s  Selected: %s%s  | Keys: ? help, ↑↓ move, ctrl+f/ctrl+b page, Home End, gg/G, space select, A select-all, R invert, s sort, r reverse-sort, / filter, d/enter delete, q quit\n\n",
-            len(m.results), utils.HumanizeBytes(m.totalSize), utils.HumanizeBytes(m.selectedSize), filterInfo)
+        return fmt.Sprintf("Found: %d  Total: %s  Selected(del): %s  Selected(zip): %s%s  | Keys: ? help, ↑↓ move, ctrl+f/ctrl+b page, Home End, gg/G, space/x [x], z [z], A/X all-[x], Z all-[z], R invert(z→·,x→·,·→x), s sort, r reverse-sort, / filter, d/enter delete|compress, q quit\n\n",
+            len(m.results), utils.HumanizeBytes(m.totalSize), utils.HumanizeBytes(m.selectedSize), utils.HumanizeBytes(m.zipSelectedSize), filterInfo)
     default:
         return ""
     }
@@ -630,14 +789,16 @@ func (m *model) helpText() string {
         "  ctrl+f / ctrl+b  Page down/up",
         "  Home/End   Jump to top/bottom",
         "  gg / G     Jump to top/bottom (vim)",
-        "  space     Toggle selection",
-        "  A / ctrl+a Select all (filtered view)",
-        "  R / ctrl+r Reverse selection (filtered view)",
+        "  space/x  Toggle delete selection [x]",
+        "  z         Toggle compress selection [z]",
+        "  A / X / ctrl+a Mark all [x] (filtered view)",
+        "  Z          Mark all [z] (filtered view)",
+        "  R          Invert marks (z→·, x→·, ·→x)",
         "  s         Toggle sort field (size/path)",
         "  r         Reverse sort",
         "  /         Filter (type, Enter to confirm, Esc to clear)",
-        "  d/enter   Delete selected",
-        "  q/esc     Quit (cancels delete; cancels scan)",
+        "  d/enter   Delete selected [x] / Compress selected [z]",
+        "  q/esc/ctrl+c/ctrl+d  Quit (cancels delete/compress; cancels scan)",
     }
     w := m.termW
     if w <= 0 {
@@ -696,6 +857,8 @@ var (
 	sizeStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("45"))            // cyan
 	pathStyleNormal   = lipgloss.NewStyle()
 	pathStyleSelected = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))             // green
+	markZipStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true) // orange
+	pathStyleZip      = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))            // orange
 	highlightStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("227")).Bold(true) // yellow
 	headerStyle       = lipgloss.NewStyle().Bold(true)
 )
@@ -791,6 +954,64 @@ func (m *model) waitDeleteMsg() tea.Cmd {
 	}
 }
 
+// compression wiring
+type zipProgressMsg struct {
+    completed int
+    total     int
+    path      string
+    dest      string
+    written   int64
+    err       error
+}
+type zipDoneMsg struct{ summary compressor.Summary }
+
+func (m *model) startCompression() (tea.Model, tea.Cmd) {
+    m.st = statusZipping
+    m.sp = spinner.New()
+    m.sp.Spinner = spinner.Dot
+    m.zipCompleted = 0
+    targets := m.selectedZipTargets()
+    m.zipTotal = len(targets)
+    ch := make(chan tea.Msg)
+    m.zipCh = ch
+
+    go func() {
+        pch := make(chan compressor.Progress, 16)
+        var sum compressor.Summary
+        done := make(chan struct{})
+        go func() {
+            ctx, cancel := context.WithCancel(context.Background())
+            m.zipCancel = cancel
+            sum = compressor.CompressTargets(ctx, targets, compressor.Options{OutDir: "", Concurrency: m.opts.Concurrency, DeleteAfter: m.zipDeleteAfter}, pch)
+            close(done)
+        }()
+        for {
+            select {
+            case p, ok := <-pch:
+                if !ok {
+                    p = compressor.Progress{Completed: m.zipTotal, Total: m.zipTotal}
+                }
+                ch <- zipProgressMsg{completed: p.Completed, total: p.Total, path: p.Path, dest: p.Dest, written: p.BytesWritten, err: p.Err}
+            case <-done:
+                ch <- zipDoneMsg{summary: sum}
+                close(ch)
+                return
+            }
+        }
+    }()
+
+    return m, tea.Batch(m.sp.Tick, m.waitZipMsg())
+}
+
+func (m *model) waitZipMsg() tea.Cmd {
+    if m.zipCh == nil { return nil }
+    return func() tea.Msg {
+        msg, ok := <-m.zipCh
+        if !ok { return nil }
+        return msg
+    }
+}
+
 func (m *model) selectedCount() int {
 	c := 0
 	for _, it := range m.items {
@@ -811,6 +1032,24 @@ func (m *model) selectedTargets() []deleter.Target {
 	return out
 }
 
+func (m *model) selectedZipCount() int {
+    c := 0
+    for _, it := range m.items {
+        if it.selZip { c++ }
+    }
+    return c
+}
+
+func (m *model) selectedZipTargets() []compressor.Target {
+    var out []compressor.Target
+    for _, it := range m.items {
+        if it.selZip {
+            out = append(out, compressor.Target{Path: it.path, Size: it.size})
+        }
+    }
+    return out
+}
+
 func (m *model) removeDeleted(succ []deleter.Target) {
 	if len(succ) == 0 {
 		return
@@ -828,18 +1067,18 @@ func (m *model) removeDeleted(succ []deleter.Target) {
 		}
 		kept = append(kept, it)
 	}
-	m.items = kept
-	// Adjust cursor if necessary
-	if m.cursor >= len(m.items) && len(m.items) > 0 {
-		m.cursor = len(m.items) - 1
-	}
-	// filter results slice as well
-	newRes := m.results[:0]
-	for _, r := range m.results {
-		if _, ok := rm[r.Path]; ok {
-			continue
-		}
-		newRes = append(newRes, r)
-	}
-	m.results = newRes
+m.items = kept
+    // Adjust cursor if necessary
+    if m.cursor >= len(m.items) && len(m.items) > 0 {
+        m.cursor = len(m.items) - 1
+    }
+    // filter results slice as well
+    newRes := m.results[:0]
+    for _, r := range m.results {
+        if _, ok := rm[r.Path]; ok {
+            continue
+        }
+        newRes = append(newRes, r)
+    }
+    m.results = newRes
 }
