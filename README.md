@@ -2,6 +2,8 @@
 
 Scan and clean `node_modules` across a folder recursively. Comes with a fast scanner, an interactive TUI for selecting directories to delete, and a scriptable CLI for CI or batch workflows.
 
+![preview](./screenshot/1.png)
+
 ## Features
 
 - Fast, concurrent scan for `node_modules` (depth limiting, excludes, symlink options)
